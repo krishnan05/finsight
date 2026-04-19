@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from src.ml_sentiment import fetch_news, score_sentiment, aggregate_sentiment, scenario_adjustment
+from src.ml.finbert import fetch_news, score_sentiment, aggregate_sentiment, scenario_adjustment
 
 router = APIRouter()
 

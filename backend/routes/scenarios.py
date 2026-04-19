@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from src.scenarios import run_scenario, SCENARIOS, MULTIPLES, SHARES
+from src.financial.scenarios import run_scenario, SCENARIOS, MULTIPLES, SHARES
 
 router = APIRouter()
 

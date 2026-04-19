@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from src.fetch import get_current_price
-from src.model import project_income_statement, calculate_ratios
+from src.data.fetch import get_current_price
+from src.financial.model import project_income_statement, calculate_ratios
 
 router = APIRouter()
 

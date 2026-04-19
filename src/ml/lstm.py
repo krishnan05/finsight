@@ -117,7 +117,7 @@ def feature_importance(model, scaler):
     return importance
 
 
-def print_ml_eps():
+def print_ml_forecast(ticker):
     console = Console()
     console.print("\n[bold blue]━━━ Phase 3: ML EPS Forecasting ━━━[/bold blue]")
 

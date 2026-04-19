@@ -108,7 +108,7 @@ def scenario_adjustment(avg_score):
         return 0.00, "Neutral news flow → no adjustment to base target"
 
 
-def print_sentiment():
+def print_sentiment(ticker="ICICIBANK.NS"):
     console = Console()
     console.print("\n[bold blue]━━━ Phase 3: Sentiment Analysis ━━━[/bold blue]")
     console.print(f"[dim]Fetching recent news for {TICKER}...[/dim]\n")

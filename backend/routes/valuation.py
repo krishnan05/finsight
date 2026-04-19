@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from src.valuation import run_full_valuation, cost_of_equity
+from src.financial.valuation import run_full_valuation, cost_of_equity
 
 router = APIRouter()
 
