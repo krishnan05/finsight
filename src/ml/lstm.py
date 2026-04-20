@@ -28,24 +28,42 @@ TARGET   = "net_income"  # what we're forecasting
 # ── Data fetching ────────────────────────────────────────────────────────────
 
 def fetch_quarterly_data(ticker):
-    t   = yf.Ticker(ticker)
+    import yfinance as yf
+    t    = yf.Ticker(ticker)
+    info = t.info
 
-    # Try quarterly first
+    # Detect USD disguised as INR
+    market_cap_cr = (info.get("marketCap") or 0) / 1e7
+    currency      = info.get("currency", "INR")
+
     inc = t.quarterly_financials
     use_annual = False
 
-    if inc is None or inc.empty or len(inc.columns) < 6:
-        # Fall back to annual
-        inc = t.financials
+    if inc is None or inc.empty or len(inc.columns) < 4:
+        inc        = t.financials
         use_annual = True
 
     if inc is None or inc.empty:
         return None
 
+    # Check USD flag using P/S ratio
+    usd_flag = False
+    if "Total Revenue" in inc.index:
+        try:
+            raw_rev    = float(inc.loc["Total Revenue"].iloc[0])
+            rev_cr_inr = raw_rev / 1e7
+            ps_ratio   = market_cap_cr / rev_cr_inr if rev_cr_inr > 0 else 999
+            if ps_ratio > 20:
+                usd_flag = True
+        except:
+            pass
+
+    fx = 85.0 if usd_flag else 1.0
+
     rows = []
     for col in reversed(inc.columns):
         def safe(key, col=col):
-            try:    return float(inc.loc[key, col]) / 1e7
+            try:    return float(inc.loc[key, col]) * fx / 1e7
             except: return np.nan
 
         rows.append({
@@ -61,13 +79,11 @@ def fetch_quarterly_data(ticker):
     df = df.ffill().bfill()
     df = df.dropna()
 
-    # If annual data, interpolate to quarterly (4x points)
     if use_annual and len(df) >= 3:
         df_interp = df.resample('QE').interpolate(method='linear')
         return df_interp
 
     return df
-
 
 def augment_data(df, n_augments=3):
     """
