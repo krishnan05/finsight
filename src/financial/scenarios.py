@@ -35,25 +35,27 @@ SCENARIO_MULTIPLIERS = {
 }
 
 def run_scenario(ticker, scenario_name):
-    info = get_company_info(ticker)
-    tmpl = get_template(info["sector"])
-    adj  = SCENARIO_MULTIPLIERS[scenario_name]
+    from src.financial.model import get_base_financials
+    info  = get_company_info(ticker)
+    base  = get_base_financials(ticker)
+    tmpl  = get_template(info["sector"])
+    adj   = SCENARIO_MULTIPLIERS[scenario_name]
 
-    revenue  = info.get("revenue_cr") or 100000
-    ebitda   = info.get("ebitda_cr")  or revenue * tmpl["ebitda_margin"][0]
-    pat      = revenue * 0.08
-    net_debt = info.get("net_debt_cr") or 0
-    shares   = info.get("shares_cr")   or 100
-    equity   = info.get("market_cap_cr") or revenue * 0.5
+    revenue  = base["revenue"]     or 100000
+    ebitda   = base["ebitda"]      or revenue * tmpl["ebitda_margin"][0]
+    pat      = base["pat"]         or revenue * 0.08
+    net_debt = (base["total_debt"] or 0) - (base["cash"] or 0)
+    shares   = info.get("shares_cr") or 100
+    equity   = base["equity"]      or revenue * 0.5
 
     rows = []
     prev = {"revenue": revenue, "ebitda": ebitda, "pat": pat,
             "net_debt": net_debt, "equity": equity}
 
     for i, yr in enumerate(PROJ_YEARS):
-        growth = tmpl["revenue_growth"][i] + adj["revenue_growth_adj"]
-        margin = tmpl["ebitda_margin"][i]  + adj["ebitda_margin_adj"]
-        capex_pct = tmpl["capex_pct_rev"]  + adj["capex_adj"]
+        growth    = tmpl["revenue_growth"][i] + adj["revenue_growth_adj"]
+        margin    = tmpl["ebitda_margin"][i]  + adj["ebitda_margin_adj"]
+        capex_pct = tmpl["capex_pct_rev"]     + adj["capex_adj"]
 
         rev        = prev["revenue"] * (1 + growth)
         ebitda_new = rev * margin
@@ -68,13 +70,13 @@ def run_scenario(ticker, scenario_name):
         eps        = pat_new / shares if shares else 0
 
         rows.append({
-            "Year":    yr,
-            "Revenue": round(rev),
-            "EBITDA":  round(ebitda_new),
-            "PAT":     round(pat_new),
-            "FCF":     round(fcf),
-            "EPS (₹)":round(eps, 1),
-            "EBITDA %":round(margin * 100, 1),
+            "Year":     yr,
+            "Revenue":  round(rev),
+            "EBITDA":   round(ebitda_new),
+            "PAT":      round(pat_new),
+            "FCF":      round(fcf),
+            "EPS (₹)": round(eps, 1),
+            "EBITDA %": round(margin * 100, 1),
         })
         prev = {"revenue": rev, "ebitda": ebitda_new, "pat": pat_new,
                 "net_debt": prev["net_debt"] * 0.95, "equity": equity_new}

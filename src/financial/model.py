@@ -14,27 +14,62 @@ def get_base_financials(ticker):
     bal  = fins["balance"]
     csh  = fins["cashflow"]
 
-    def safe(df, key, col=0, divisor=1e7):
+    # ── Detect USD disguised as INR ──────────────────────────────────────
+    # yfinance returns revenue/ebitda in USD for some NSE stocks (e.g. INFY)
+    # Detection: if P/S ratio using raw÷1e7 is > 20x, data is in USD
+    usd_flag = False
+    market_cap_cr = info.get("market_cap_cr") or 0
+    if inc is not None and "Total Revenue" in inc.index:
         try:
-            return round(df.loc[key].iloc[col] / divisor, 0)
+            raw_rev     = float(inc.loc["Total Revenue"].iloc[0])
+            rev_cr_inr  = raw_rev / 1e7
+            ps_ratio    = market_cap_cr / rev_cr_inr if rev_cr_inr > 0 else 999
+            if ps_ratio > 20:   # unrealistic P/S → data must be USD
+                usd_flag = True
+        except:
+            pass
+
+    fx = 85.0 if usd_flag else 1.0
+
+    def safe(df, key, col=0):
+        try:
+            return round(float(df.loc[key].iloc[col]) * fx / 1e7, 0)
         except:
             return None
 
+    revenue      = safe(inc, "Total Revenue")
+    gross_profit = safe(inc, "Gross Profit")
+    ebitda       = safe(inc, "Normalized EBITDA") or safe(inc, "EBITDA")
+    ebit         = safe(inc, "EBIT") or safe(inc, "Operating Income")
+    pat          = safe(inc, "Net Income")
+    depreciation = safe(csh, "Depreciation And Amortization")
+    capex        = abs(safe(csh, "Capital Expenditure") or 0)
+    total_debt   = safe(bal, "Total Debt") or 0
+    cash         = safe(bal, "Cash And Cash Equivalents") or 0
+    equity       = safe(bal, "Stockholders Equity")
+
+    # fallback: use info fields if statements missing
+    if not revenue or revenue < 100:
+        revenue = info.get("revenue_cr") or 100000
+    if not ebitda or ebitda < 10:
+        ebitda = info.get("ebitda_cr") or revenue * 0.15
+
     return {
-        "revenue":      safe(inc, "Total Revenue"),
-        "gross_profit": safe(inc, "Gross Profit"),
-        "ebitda":       info.get("ebitda_cr"),
-        "ebit":         safe(inc, "EBIT"),
-        "pat":          safe(inc, "Net Income"),
-        "depreciation": safe(csh, "Depreciation And Amortization"),
-        "capex":        abs(safe(csh, "Capital Expenditure") or 0),
-        "total_debt":   safe(bal, "Total Debt"),
-        "cash":         safe(bal, "Cash And Cash Equivalents"),
+        "revenue":      revenue,
+        "gross_profit": gross_profit,
+        "ebitda":       ebitda,
+        "ebit":         ebit,
+        "pat":          pat,
+        "depreciation": depreciation,
+        "capex":        capex,
+        "total_debt":   total_debt,
+        "cash":         cash,
         "total_assets": safe(bal, "Total Assets"),
-        "equity":       safe(bal, "Stockholders Equity"),
+        "equity":       equity,
         "shares_cr":    info.get("shares_cr"),
         "sector":       info.get("sector", "Unknown"),
         "name":         info.get("name", ticker),
+        "usd_flag":     usd_flag,  # useful for debugging
     }
 
 def project_financials(ticker):

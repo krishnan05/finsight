@@ -1,172 +1,276 @@
+import torch
+import torch.nn as nn
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import LeaveOneOut
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error
 from rich.console import Console
 from rich.table import Table
+from rich import box
+import yfinance as yf
+import warnings
+warnings.filterwarnings("ignore")
 
-# ── Banking sector dataset ───────────────────────────────────────────────────
-# Features: [NIM, loan_growth, credit_cost, casa_ratio, cost_to_income, roe]
-# Target: forward EPS growth (next year EPS / current EPS - 1)
-# Source: Annual reports FY2015-FY2024, 6 major Indian banks
-# Banks: ICICI, HDFC, Kotak, Axis, SBI, IndusInd
+DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+SEQ_LEN    = 3   # input: last 4 quarters
+PRED_LEN   = 3   # output: next 4 quarters (1 year)
+HIDDEN     = 64
+LAYERS     = 2
+DROPOUT    = 0.2
+EPOCHS     = 300
+LR         = 0.001
+MC_SAMPLES = 100  # Monte Carlo dropout samples for confidence intervals
 
-SECTOR_DATA = pd.DataFrame([
-    # NIM,  loan_gr, cred_cost, casa,  cti,   roe,   eps_growth
-    [0.038, 0.18,    0.013,     0.44,  0.42,  0.12,   0.18],
-    [0.040, 0.20,    0.010,     0.46,  0.41,  0.14,   0.22],
-    [0.042, 0.22,    0.008,     0.45,  0.39,  0.16,   0.28],
-    [0.039, 0.15,    0.015,     0.43,  0.43,  0.11,   0.12],
-    [0.036, 0.12,    0.020,     0.41,  0.45,  0.09,  -0.05],
-    [0.035, 0.10,    0.025,     0.40,  0.47,  0.07,  -0.15],  # stress year
-    [0.037, 0.14,    0.018,     0.42,  0.44,  0.10,   0.08],
-    [0.040, 0.17,    0.012,     0.44,  0.41,  0.13,   0.20],
-    [0.043, 0.21,    0.009,     0.46,  0.40,  0.15,   0.25],
-    [0.045, 0.24,    0.007,     0.47,  0.38,  0.17,   0.32],
-    [0.042, 0.19,    0.010,     0.45,  0.40,  0.16,   0.27],  # HDFC
-    [0.044, 0.21,    0.008,     0.47,  0.38,  0.18,   0.30],
-    [0.046, 0.23,    0.007,     0.48,  0.37,  0.19,   0.35],
-    [0.043, 0.18,    0.011,     0.46,  0.39,  0.17,   0.24],
-    [0.041, 0.16,    0.013,     0.44,  0.41,  0.15,   0.18],
-    [0.038, 0.12,    0.018,     0.42,  0.43,  0.12,   0.05],
-    [0.036, 0.09,    0.022,     0.40,  0.46,  0.09,  -0.08],  # COVID stress
-    [0.039, 0.13,    0.016,     0.43,  0.43,  0.11,   0.10],
-    [0.042, 0.18,    0.011,     0.45,  0.40,  0.14,   0.22],
-    [0.045, 0.22,    0.008,     0.47,  0.38,  0.17,   0.30],
-    [0.034, 0.11,    0.022,     0.38,  0.48,  0.08,  -0.10],  # SBI stress
-    [0.033, 0.09,    0.028,     0.37,  0.50,  0.06,  -0.18],
-    [0.035, 0.12,    0.020,     0.39,  0.47,  0.09,   0.05],
-    [0.037, 0.15,    0.015,     0.41,  0.44,  0.11,   0.15],
-    [0.039, 0.18,    0.011,     0.43,  0.42,  0.13,   0.22],
-    [0.041, 0.20,    0.009,     0.44,  0.40,  0.15,   0.27],
-    [0.044, 0.22,    0.007,     0.46,  0.38,  0.17,   0.32],
-    [0.040, 0.17,    0.012,     0.44,  0.41,  0.14,   0.20],  # Kotak
-    [0.042, 0.19,    0.010,     0.46,  0.39,  0.16,   0.25],
-    [0.045, 0.22,    0.008,     0.48,  0.37,  0.18,   0.31],
-    [0.038, 0.15,    0.014,     0.43,  0.42,  0.13,   0.16],
-    [0.036, 0.11,    0.019,     0.41,  0.44,  0.10,   0.06],
-    [0.047, 0.19,    0.007,     0.39,  0.37,  0.18,   0.28],  # ICICI FY2024
-    [0.046, 0.16,    0.007,     0.39,  0.375, 0.147,  0.22],  # ICICI FY2025E
-], columns=["nim","loan_growth","credit_cost","casa",
-            "cost_to_income","roe","eps_growth"])
+# ── Features used for LSTM input ────────────────────────────────────────────
+FEATURES = ["revenue", "gross_profit", "operating_income", "net_income"]
+TARGET   = "net_income"  # what we're forecasting
 
-FEATURE_COLS = ["nim","loan_growth","credit_cost",
-                "casa","cost_to_income","roe"]
-TARGET_COL   = "eps_growth"
+# ── Data fetching ────────────────────────────────────────────────────────────
 
-# ── ICICI projected scenarios ────────────────────────────────────────────────
-ICICI_SCENARIOS = {
-    "🐻 Bear": {"nim":0.040,"loan_growth":0.09,"credit_cost":0.013,
-                "casa":0.375,"cost_to_income":0.390,"roe":0.099},
-    "📊 Base": {"nim":0.044,"loan_growth":0.14,"credit_cost":0.008,
-                "casa":0.385,"cost_to_income":0.365,"roe":0.143},
-    "🐂 Bull": {"nim":0.047,"loan_growth":0.17,"credit_cost":0.006,
-                "casa":0.390,"cost_to_income":0.350,"roe":0.172},
-}
+def fetch_quarterly_data(ticker):
+    t   = yf.Ticker(ticker)
 
-ICICI_CURRENT_EPS = 73.27  # TTM EPS from yfinance
+    # Try quarterly first
+    inc = t.quarterly_financials
+    use_annual = False
 
+    if inc is None or inc.empty or len(inc.columns) < 6:
+        # Fall back to annual
+        inc = t.financials
+        use_annual = True
 
-def train_model():
-    X = SECTOR_DATA[FEATURE_COLS].values
-    y = SECTOR_DATA[TARGET_COL].values
+    if inc is None or inc.empty:
+        return None
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    rows = []
+    for col in reversed(inc.columns):
+        def safe(key, col=col):
+            try:    return float(inc.loc[key, col]) / 1e7
+            except: return np.nan
 
-    # Ridge regression — handles multicollinearity well
-    # (financial ratios are often correlated with each other)
-    model = Ridge(alpha=1.0)
-    model.fit(X_scaled, y)
+        rows.append({
+            "date":             col,
+            "revenue":          safe("Total Revenue"),
+            "gross_profit":     safe("Gross Profit"),
+            "operating_income": safe("Operating Income"),
+            "net_income":       safe("Net Income"),
+        })
 
-    # Leave-One-Out cross validation to estimate accuracy
-    loo  = LeaveOneOut()
-    preds, actuals = [], []
-    for train_idx, test_idx in loo.split(X_scaled):
-        m = Ridge(alpha=1.0)
-        m.fit(X_scaled[train_idx], y[train_idx])
-        preds.append(m.predict(X_scaled[test_idx])[0])
-        actuals.append(y[test_idx][0])
+    df = pd.DataFrame(rows).set_index("date")
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.ffill().bfill()
+    df = df.dropna()
 
-    mae = mean_absolute_error(actuals, preds)
-    return model, scaler, mae
+    # If annual data, interpolate to quarterly (4x points)
+    if use_annual and len(df) >= 3:
+        df_interp = df.resample('QE').interpolate(method='linear')
+        return df_interp
+
+    return df
 
 
-def predict_eps_growth(model, scaler):
-    results = {}
-    for scenario, features in ICICI_SCENARIOS.items():
-        X = np.array([[features[f] for f in FEATURE_COLS]])
-        X_scaled = scaler.transform(X)
-        predicted_growth = model.predict(X_scaled)[0]
-        predicted_eps    = round(ICICI_CURRENT_EPS * (1 + predicted_growth), 1)
-        results[scenario] = {
-            "Predicted EPS Growth": f"{predicted_growth*100:+.1f}%",
-            "ML EPS Estimate (₹)":  predicted_eps,
-        }
-    return results
+def augment_data(df, n_augments=3):
+    """
+    Augment small dataset with slight noise — standard technique
+    for financial time series with limited history.
+    """
+    augmented = [df.copy()]
+    for _ in range(n_augments):
+        noise = df * (1 + np.random.normal(0, 0.02, df.shape))
+        augmented.append(noise)
+    return pd.concat(augmented, ignore_index=True)
 
 
-def feature_importance(model, scaler):
-    # Ridge coefficients after scaling = relative importance
-    coefs = model.coef_
-    importance = pd.Series(
-        np.abs(coefs), index=FEATURE_COLS
-    ).sort_values(ascending=False)
-    return importance
+# ── LSTM Model ───────────────────────────────────────────────────────────────
+
+class FinancialLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers,
+                 output_size, dropout):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size  = input_size,
+            hidden_size = hidden_size,
+            num_layers  = num_layers,
+            dropout     = dropout if num_layers > 1 else 0,
+            batch_first = True,
+        )
+        self.dropout = nn.Dropout(dropout)  # MC Dropout
+        self.fc      = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        out     = self.dropout(out[:, -1, :])  # last timestep
+        return self.fc(out)
+
+
+# ── Sequence builder ─────────────────────────────────────────────────────────
+
+def build_sequences(data, seq_len, pred_len):
+    X, y = [], []
+    for i in range(len(data) - seq_len - pred_len + 1):
+        X.append(data[i : i + seq_len])
+        y.append(data[i + seq_len : i + seq_len + pred_len, -1])  # target col
+    return np.array(X), np.array(y)
+
+
+# ── Training ─────────────────────────────────────────────────────────────────
+
+def train_model(X_train, y_train):
+    model     = FinancialLSTM(
+        input_size  = X_train.shape[2],
+        hidden_size = HIDDEN,
+        num_layers  = LAYERS,
+        output_size = PRED_LEN,
+        dropout     = DROPOUT,
+    ).to(DEVICE)
+
+    optimiser = torch.optim.Adam(model.parameters(), lr=LR)
+    criterion = nn.MSELoss()
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimiser, patience=30, factor=0.5
+    )
+
+    X_t = torch.FloatTensor(X_train).to(DEVICE)
+    y_t = torch.FloatTensor(y_train).to(DEVICE)
+
+    model.train()
+    best_loss = float("inf")
+    best_state = None
+
+    for epoch in range(EPOCHS):
+        optimiser.zero_grad()
+        pred = model(X_t)
+        loss = criterion(pred, y_t)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimiser.step()
+        scheduler.step(loss)
+
+        if loss.item() < best_loss:
+            best_loss  = loss.item()
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+
+    model.load_state_dict(best_state)
+    return model
+
+
+# ── Monte Carlo prediction ────────────────────────────────────────────────────
+
+def mc_predict(model, X_input, n_samples=MC_SAMPLES):
+    """
+    Run forward pass n_samples times with dropout ON.
+    Mean = point estimate. Std = uncertainty.
+    This gives confidence intervals without a separate model.
+    """
+    model.train()  # keep dropout active
+    preds = []
+    X_t   = torch.FloatTensor(X_input).to(DEVICE)
+
+    with torch.no_grad():
+        for _ in range(n_samples):
+            pred = model(X_t).cpu().numpy()
+            preds.append(pred)
+
+    preds  = np.array(preds)         # (n_samples, batch, pred_len)
+    mean   = preds.mean(axis=0)      # (batch, pred_len)
+    std    = preds.std(axis=0)       # (batch, pred_len)
+    return mean, std
+
+
+# ── Main pipeline ─────────────────────────────────────────────────────────────
+
+def run_lstm_forecast(ticker):
+    console = Console()
+
+    # 1. Fetch data
+    df = fetch_quarterly_data(ticker)
+    if df is None or len(df) < SEQ_LEN + PRED_LEN:
+        return None, None, None, f"Insufficient data ({len(df) if df is not None else 0} quarters)"
+
+    # 2. Scale
+    scaler = MinMaxScaler()
+    scaled = scaler.fit_transform(df[FEATURES].values)
+
+    # 3. Augment if small dataset
+    if len(scaled) < 20:
+        df_aug = pd.DataFrame(scaled, columns=FEATURES)
+        df_aug = augment_data(df_aug, n_augments=4)
+        scaled_aug = df_aug.values
+    else:
+        scaled_aug = scaled
+
+    # 4. Build sequences
+    X, y = build_sequences(scaled_aug, SEQ_LEN, PRED_LEN)
+    if len(X) < 2:
+        return None, None, None, "Not enough sequences to train"
+
+    # 5. Train
+    model = train_model(X, y)
+
+    # 6. Predict on last SEQ_LEN quarters
+    last_seq = scaled[-SEQ_LEN:].reshape(1, SEQ_LEN, len(FEATURES))
+    mean_scaled, std_scaled = mc_predict(model, last_seq)
+
+    # 7. Inverse transform — reconstruct full feature array to invert
+    def inverse_target(vals_scaled):
+        dummy = np.zeros((len(vals_scaled), len(FEATURES)))
+        dummy[:, FEATURES.index(TARGET)] = vals_scaled
+        return scaler.inverse_transform(dummy)[:, FEATURES.index(TARGET)]
+
+    mean_pred = inverse_target(mean_scaled[0])
+    upper     = inverse_target(mean_scaled[0] + std_scaled[0])
+    lower     = inverse_target(mean_scaled[0] - std_scaled[0])
+
+    # 8. Compute MAE on training set
+    train_preds, _ = mc_predict(model, X)
+    y_true = inverse_target(y[:, -1])
+    y_hat  = inverse_target(train_preds[:, -1])
+    mae    = mean_absolute_error(y_true, y_hat)
+
+    return mean_pred, lower, upper, mae
 
 
 def print_ml_forecast(ticker):
     console = Console()
-    console.print("\n[bold blue]━━━ Phase 3: ML EPS Forecasting ━━━[/bold blue]")
+    console.print(f"\n[bold blue]━━━ LSTM Financial Forecast ━━━[/bold blue]")
+    console.print(f"[dim]Training on quarterly data for {ticker}...[/dim]")
+    console.print(f"[dim]Device: {DEVICE} | Seq len: {SEQ_LEN}Q → Pred: {PRED_LEN}Q[/dim]\n")
 
-    model, scaler, mae = train_model()
-    console.print(f"\n[dim]Model: Ridge Regression | "
-                  f"Training samples: {len(SECTOR_DATA)} | "
-                  f"LOO Cross-val MAE: {mae*100:.1f}pp[/dim]")
+    mean, lower, upper, mae_or_err = run_lstm_forecast(ticker)
 
-    # Feature importance
-    imp = feature_importance(model, scaler)
-    console.print("\n[cyan]Feature Importance (what drives EPS growth most):[/cyan]")
-    for feat, score in imp.items():
-        bar = "█" * int(score * 30)
-        console.print(f"  {feat:<18} {bar} {score:.3f}")
+    if mean is None:
+        console.print(f"[red]LSTM skipped: {mae_or_err}[/red]")
+        return
 
-    # Scenario predictions
-    results = predict_eps_growth(model, scaler)
-    console.print(f"\n[cyan]ML EPS Predictions vs Manual Model:[/cyan]")
-    console.print(f"[dim]Current TTM EPS: ₹{ICICI_CURRENT_EPS}[/dim]\n")
+    quarters = ["Q1 FY26E", "Q2 FY26E", "Q3 FY26E"][:PRED_LEN]
+    t = Table(show_header=True, header_style="bold magenta", box=box.HEAVY_EDGE)
+    t.add_column("Quarter",          width=12)
+    t.add_column("Forecast PAT",     justify="right", width=16)
+    t.add_column("Lower (–1σ)",      justify="right", width=14)
+    t.add_column("Upper (+1σ)",      justify="right", width=14)
+    t.add_column("Confidence Range", justify="right", width=18)
 
-    t = Table(show_header=True, header_style="bold magenta")
-    t.add_column("Scenario",              width=14)
-    t.add_column("ML EPS Growth",         justify="right", width=16)
-    t.add_column("ML EPS Estimate (₹)",   justify="right", width=18)
-    t.add_column("Manual EPS FY2027E (₹)",justify="right", width=22)
-    t.add_column("Divergence",            justify="right", width=14)
-
-    manual_eps = {"🐻 Bear": 38.9, "📊 Base": 61.5, "🐂 Bull": 78.3}
-    colors     = {"🐻 Bear": "red","📊 Base": "yellow","🐂 Bull": "green"}
-
-    for scenario, res in results.items():
-        ml_eps  = res["ML EPS Estimate (₹)"]
-        man_eps = manual_eps[scenario]
-        div     = round((ml_eps - man_eps) / man_eps * 100, 1)
-        color   = colors[scenario]
-        div_str = f"[{'green' if div > 0 else 'red'}]{div:+.1f}%[/]"
+    for i, q in enumerate(quarters):
+        m = mean[i]; l = lower[i]; u = upper[i]
+        rng = u - l
         t.add_row(
-            f"[{color}]{scenario}[/{color}]",
-            res["Predicted EPS Growth"],
-            f"₹{ml_eps}",
-            f"₹{man_eps}",
-            div_str,
+            q,
+            f"[green]₹{m:,.0f} cr[/green]",
+            f"₹{l:,.0f} cr",
+            f"₹{u:,.0f} cr",
+            f"± ₹{rng/2:,.0f} cr",
         )
     console.print(t)
 
-    console.print("\n[dim]Interpretation: Large divergence = assumption "
-                  "worth revisiting. ML uses sector patterns; "
-                  "manual uses company-specific logic.[/dim]")
+    annual_pat = sum(mean)
+    console.print(f"\n  [cyan]Annual PAT FY2026E (sum of 4Q)[/cyan]: "
+                  f"[bold green]₹{annual_pat:,.0f} cr[/bold green]")
+    console.print(f"  [cyan]Training MAE[/cyan]: ₹{mae_or_err:,.0f} cr")
+    console.print(f"\n  [dim]Confidence intervals via Monte Carlo Dropout "
+                  f"({MC_SAMPLES} forward passes)[/dim]")
+    console.print(f"  [dim]Model: {LAYERS}-layer LSTM · "
+                  f"Hidden: {HIDDEN} · Dropout: {DROPOUT}[/dim]\n")
 
 
 if __name__ == "__main__":
-    print_ml_eps()
+    print_ml_forecast("RELIANCE.NS")

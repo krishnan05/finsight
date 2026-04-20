@@ -109,11 +109,13 @@ def scenario_adjustment(avg_score):
 
 
 def print_sentiment(ticker):
+    from src.financial.scenarios import get_price_targets
+
     console = Console()
     console.print("\n[bold blue]━━━ Phase 3: Sentiment Analysis ━━━[/bold blue]")
     console.print(f"[dim]Fetching recent news for {ticker}...[/dim]\n")
 
-    articles = fetch_news()
+    articles = fetch_news(ticker)
     if not articles:
         console.print("[red]No news found. Check ticker or internet connection.[/red]")
         return
@@ -126,9 +128,9 @@ def print_sentiment(ticker):
     # Article table
     t = Table(show_header=True, header_style="bold magenta",
               box=box.SIMPLE_HEAVY, show_lines=False)
-    t.add_column("Headline",   width=60)
-    t.add_column("Sentiment",  width=14, justify="center")
-    t.add_column("Score",      width=8,  justify="right")
+    t.add_column("Headline",  width=60)
+    t.add_column("Sentiment", width=14, justify="center")
+    t.add_column("Score",     width=8,  justify="right")
 
     for s in scored:
         color = ("green" if "Positive" in s["label"] else
@@ -141,7 +143,7 @@ def print_sentiment(ticker):
     console.print(t)
 
     # Aggregate
-    agg = aggregate_sentiment(scored)
+    agg      = aggregate_sentiment(scored)
     adj, adj_note = scenario_adjustment(agg["avg_score"])
 
     console.print("\n[bold cyan]━━━ Sentiment Summary ━━━[/bold cyan]")
@@ -153,16 +155,21 @@ def print_sentiment(ticker):
                   f"(range: -1.0 to +1.0)")
     console.print(f"\n  Signal  → [bold]{agg['signal']}[/bold]")
 
-    # Price target adjustment
-    BASE_TARGET = 940  # from our Phase 2 base case
-    adjusted    = round(BASE_TARGET * (1 + adj))
+    # Get actual base target for this company
+    try:
+        targets     = get_price_targets(ticker)
+        base_target = int(targets.loc["📊 Base", "Avg Target (₹)"])
+    except Exception:
+        base_target = 1000  # neutral fallback if valuation fails
+
+    adjusted = round(base_target * (1 + adj))
+
     console.print(f"\n[bold cyan]━━━ Sentiment-Adjusted Price Target ━━━[/bold cyan]")
-    console.print(f"  Base model target    : ₹{BASE_TARGET}")
+    console.print(f"  Base model target    : ₹{base_target:,}")
     console.print(f"  Sentiment adjustment : {adj*100:+.0f}%  ({adj_note})")
-    console.print(f"  Adjusted target      : [bold green]₹{adjusted}[/bold green]")
+    console.print(f"  Adjusted target      : [bold green]₹{adjusted:,}[/bold green]")
     console.print(f"\n  [dim]Note: Sentiment is a qualitative overlay, "
                   f"not a replacement for fundamental analysis.[/dim]\n")
-
-
+    
 if __name__ == "__main__":
     print_sentiment()
