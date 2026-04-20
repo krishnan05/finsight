@@ -5,16 +5,16 @@ from rich.table import Table
 from rich import box
 from datetime import datetime
 
-TICKER = "ICICIBANK.NS"
+
 
 # ── Sector / company keywords for relevance filtering ───────────────────────
 RELEVANT_KEYWORDS = [
-    "icici", "bank", "npa", "loan", "credit", "rbi", "rate",
+     "bank", "npa", "loan", "credit", "rbi", "rate",
     "profit", "earnings", "deposit", "nim", "casa", "dividend",
     "quarter", "results", "growth", "interest", "asset"
 ]
 
-def fetch_news(ticker=TICKER, max_articles=20):
+def fetch_news(ticker, max_articles=20):
     t = yf.Ticker(ticker)
     news = t.news
     if not news:
@@ -108,10 +108,10 @@ def scenario_adjustment(avg_score):
         return 0.00, "Neutral news flow → no adjustment to base target"
 
 
-def print_sentiment(ticker="ICICIBANK.NS"):
+def print_sentiment(ticker):
     console = Console()
     console.print("\n[bold blue]━━━ Phase 3: Sentiment Analysis ━━━[/bold blue]")
-    console.print(f"[dim]Fetching recent news for {TICKER}...[/dim]\n")
+    console.print(f"[dim]Fetching recent news for {ticker}...[/dim]\n")
 
     articles = fetch_news()
     if not articles:

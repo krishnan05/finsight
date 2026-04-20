@@ -17,7 +17,8 @@ def dcf_valuation(ticker, fcf_series, ke=None, wacc=None, tgr=0.055):
     net_debt = info.get("net_debt_cr") or 0
     shares   = info.get("shares_cr")   or 100
     discount = wacc or ke or cost_of_equity()
-
+    fcf_series = [max(f, 0) for f in fcf_series] 
+    
     pv_fcfs = sum(f / (1 + discount)**t
                   for t, f in enumerate(fcf_series, 1))
     terminal_value = fcf_series[-1] * (1 + tgr) / (discount - tgr)
