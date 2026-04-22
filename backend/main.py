@@ -10,7 +10,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://finsight-kappa-neon.vercel.app/",  # replace with your actual Vercel URL
+        "*"  # remove this in production if you want to be strict
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
