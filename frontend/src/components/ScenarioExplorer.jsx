@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
-const YEARS = ['FY2025E', 'FY2026E', 'FY2027E'];
 
 export default function ScenarioExplorer({ data, currentPrice }) {
   const [active, setActive] = useState('📊 Base');

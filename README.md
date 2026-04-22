@@ -2,6 +2,17 @@
 
 End-to-end equity research platform for any NSE-listed company.
 
+## ⚠️ Important Disclaimer
+
+**This project is under active development and should not be used for actual investment decisions.**
+
+- Financial projections use sector-level template assumptions, not company-specific verified data
+- LSTM forecasts are trained on limited quarterly data (yfinance coverage is inconsistent for Indian stocks)
+- Valuation multiples are sector defaults — not calibrated to current market conditions
+- This is an educational project built to demonstrate financial modelling + ML concepts
+- Always consult a SEBI-registered investment advisor before making any investment decision
+
+
 ## Live Demo
 - **Web App**: https://finsight.vercel.app
 - **API Docs**: https://finsight-api.onrender.com/docs
